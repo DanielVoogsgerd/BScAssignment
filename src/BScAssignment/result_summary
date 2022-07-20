@@ -1,0 +1,88 @@
+#!/usr/bin/env python
+import sys
+import os.path
+
+import json
+
+import argparse
+
+RESULT_DIRECTORY = "."
+
+INDENT = " "*2
+from numpy import std, round, format_float_scientific
+
+
+def load_result(result):
+    try:
+        with open(f"{RESULT_DIRECTORY}/{result}/info.json") as f:
+            info = json.load(f)
+            return info
+    except FileNotFoundError:
+        print(f"Result '{result}' does not exist", file=sys.stderr)
+        sys.exit(1)
+    except:
+        print(f"Result {result} cannot be loaded", file=sys.stderr)
+        sys.exit(1)
+
+
+def sort_func(input_tuple):
+    key = input_tuple[0]
+    if 'E_' in key:
+        prefix = "0"
+    elif 'lambda_' in key:
+        prefix = "1"
+    elif 'Error' in key:
+        prefix = "3"
+    else:
+        prefix = "2"
+
+    return prefix + key
+
+
+def main(result):
+    data = load_result(result)
+    print("Command line arguments:")
+    for key, val in data['arguments'].items():
+        print(f"{INDENT*1}{key}:", val if val else '-')
+
+    print()
+    print("Model version:", data['version'])
+
+    print()
+    print("Fit parameters")
+    print(f"{INDENT*2}Data file:", data['data_file'])
+
+    print(f"{INDENT*2}Heuristics:")
+
+    for heuristic, weight in data['heuristic']:
+        print(f"{INDENT*3}{heuristic}:", weight)
+
+    print()
+    get_statistics(result)
+
+
+def get_statistics(result: str):
+    import pandas as pd
+
+    # Important information
+    # Minimum rms error
+    # Maximum rms error
+    # Standard deviation in the rms error
+
+    df = pd.read_csv(os.path.join(RESULT_DIRECTORY, result, "data.csv"))
+
+    errors = df['Error']
+    print("Minimum of RMS errors:", round(min(errors), 3), "eV")
+    print("Maximum of RMS errors:", round(max(errors), 3), "eV")
+    print("Standard deviation of RMS errors:", format_float_scientific(std(errors), 3), "eV")
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("simulation")
+
+    args = parser.parse_args()
+
+    simulation = args.simulation
+
+    main(simulation)

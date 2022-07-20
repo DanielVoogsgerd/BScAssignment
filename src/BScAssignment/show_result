@@ -1,0 +1,226 @@
+#!/usr/bin/env python
+
+import argparse
+import pandas as pd
+
+import sys
+import os.path
+
+from sympy.vector import CoordSys3D
+import json
+
+from tight_binding.model import TightBinding
+from tight_binding.objects import UnitCell
+
+from bandstructures import Bandstructure
+
+import matplotlib.pyplot as plt
+from visualisation.plot import plot_band_structure
+
+from typing import Dict, List
+
+from utils.result_finder import find_simulations
+
+import logging
+
+import os
+
+LOGGER = logging.getLogger(__name__)
+logging.basicConfig(encoding="utf-8", level=logging.INFO)
+LOGGER.setLevel(logging.DEBUG)
+LOGGER.debug("Debug enabled")
+
+SIMULATION_BASE_DIRECTORY = os.path.join(os.path.curdir, "results")
+DATA_FILE_BASE_DIRECTORY = os.path.join(os.path.curdir, "bandstructures")
+
+plt.rcParams.update(
+    {"text.usetex": True, "font.family": "sans-serif", "font.sans-serif": ["Arial"]}
+)
+
+
+def parse_arguments():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("simulations", nargs="*")
+    parser.add_argument("--store")
+
+    return parser.parse_args()
+
+
+def parameter_summary(parameters: Dict[str, float]):
+    sorted_tuple = sorted(parameters.items(), key=sort_func)
+
+    print("Parameter energies:")
+    for parameter, result in sorted_tuple:
+        print("\t{:s}: {:.2}".format(parameter, result))
+
+
+def find_bandgap_coord(eigenvalues):
+    import numpy as np
+
+    vbm = np.where(eigenvalues < 0, eigenvalues, -np.inf).argmax()
+    cbm = np.where(eigenvalues > 0, eigenvalues, np.inf).argmin()
+    cbm_coord = np.unravel_index(cbm, eigenvalues.shape)
+    vbm_coord = np.unravel_index(vbm, eigenvalues.shape)
+
+    return vbm_coord, cbm_coord
+
+
+def sort_func(input_tuple):
+    key = input_tuple[0]
+    if "E_" in key:
+        prefix = "0"
+    elif "lambda_" in key:
+        prefix = "1"
+    elif "Error" in key:
+        prefix = "3"
+    else:
+        prefix = "2"
+
+    return prefix + key
+
+
+def print_bandgap_info(name, eigenvalues):
+    vbm_coord, cbm_coord = find_bandgap_coord(eigenvalues)
+    print(
+        "{name} Bandgap: \n\tType: {type} \n\tSize: {size} eV\nVBM: {VBM}; CBM: {CBM}\nVBM location: {VBM_k}; CBM location: {CBM_k}".format(
+            **{
+                "name": name,
+                "type": "Direct" if cbm_coord[1] == vbm_coord[1] else "Indirect",
+                "CBM_k": cbm_coord[1],
+                "VBM_k": vbm_coord[1],
+                "CBM": eigenvalues[cbm_coord],
+                "VBM": eigenvalues[vbm_coord],
+                "size": eigenvalues[cbm_coord] - eigenvalues[vbm_coord],
+            }
+        )
+    )
+
+
+def get_data_file(simulation: os.PathLike) -> os.PathLike:
+    result_info_path = os.path.join(simulation, "info.json")
+    with open(result_info_path) as f:
+        info = json.load(f)
+        print(info)
+        data_file = os.path.join(
+            DATA_FILE_BASE_DIRECTORY, info["arguments"]["material"]
+        )
+
+        if info["arguments"]["data_file_suffix"]:
+            data_file += info["arguments"]["data_file_suffix"]
+
+        data_file += ".json"
+
+        return data_file
+
+
+def create_visualisation(simulations: List[os.PathLike]):
+    assert len(simulations) > 0
+    LOGGER.debug("Creating visualisation for simulations %s", simulations)
+
+    result_info_path = os.path.join(simulations[0], "info.json")
+    data_file = get_data_file(simulations[0])
+
+    simulation_count = len(simulations)
+
+    subplot_count = simulation_count + 1
+
+    original_bandstructure = Bandstructure(data_file)
+    print("Data file:", data_file)
+
+    symmetry_letters = original_bandstructure.get_symmetry_points()
+
+    fig = plt.figure(figsize=(8, 6))
+
+    ax = None
+
+    for i, simulation in enumerate(simulations, start=1):
+        LOGGER.info("Creating visualisation for simulation %s", simulation)
+
+        print(f"Subplot: {i}; Simulation: {simulation}")
+        result_data_path = os.path.join(simulation, "data.csv")
+        result_info_path = os.path.join(simulation, "info.json")
+
+        with open(result_info_path) as f:
+            info = json.load(f)
+
+        data = pd.read_csv(result_data_path)
+        row = data.sort_values(by=["Error"]).head(1).to_dict("records")[0]
+        parameter_summary(row)
+
+        unit_cell = UnitCell.from_dict(info["unit_cell"], r)
+        model = TightBinding(unit_cell, r)
+        symmetry_points = unit_cell.get_symmetry_points(symmetry_letters)
+
+        k_values_per_transition = original_bandstructure.get_points_per_direction(
+            symmetry_letters
+        )
+
+        parameterized_variable = unit_cell.get_parameter_variable(
+            k_values_per_transition
+        )
+        k_values = unit_cell.get_k_values(symmetry_points, k_values_per_transition)
+
+        tb_eigenvalues = model.get_energy_eigenvalues(row, k_values)
+        print_bandgap_info("Tight Binding", tb_eigenvalues)
+
+        # Plot Tight Binding Plot
+        ax = fig.add_subplot(1, subplot_count, i, sharey=ax)
+
+        # info["arguments"]["unit_cell_suffix"] = ''
+        ax.set_title("Tight Binding")
+
+        plot_band_structure(
+            ax, parameterized_variable, tb_eigenvalues, symmetry_letters
+        )
+
+        spin_count = 2 if unit_cell.spin_orbit_coupling else 1
+
+        print(
+            "Band count:\n\tValence: {valance_count}\n\tConduction: {conductance_count}".format(
+                valance_count=unit_cell.valence_orbital_count * spin_count,
+                conductance_count=unit_cell.conductance_orbital_count * spin_count,
+            )
+        )
+
+    # Plot original data
+    spin_count = 2 if "SOC" in data_file else 1
+    print("Spin count:", spin_count)
+
+    original_eigenvalues = original_bandstructure.load_bands(
+        symmetry_letters,
+        unit_cell.valence_orbital_count * spin_count,
+        unit_cell.conductance_orbital_count * spin_count,
+    )
+
+    print("DFT band count:", original_eigenvalues.shape)
+
+    print_bandgap_info("Original", original_eigenvalues)
+
+    ax = fig.add_subplot(1, subplot_count, subplot_count, sharey=ax)
+    ax.set_title("DFT")
+    plot_band_structure(
+        ax, parameterized_variable, original_eigenvalues, symmetry_letters
+    )
+
+
+if __name__ == "__main__":
+    # Generate band structure with found fit
+    r = CoordSys3D("r")
+
+    args = parse_arguments()
+
+    if len(args.simulations) > 0:
+        simulations = args.simulations
+    else:
+        simulations = list(find_simulations(SIMULATION_BASE_DIRECTORY).keys())
+
+    if not len(simulations):
+        print("Did not select any results")
+        sys.exit(2)
+
+    create_visualisation(simulations)
+
+    if args.store:
+        plt.savefig(args.store, dpi=300)
+    else:
+        plt.show()

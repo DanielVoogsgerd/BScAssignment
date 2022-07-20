@@ -1,0 +1,41 @@
+{
+  "lattice": [
+    [0.5, 0.5, 0],
+    [0, 0.5, 0.5],
+    [0.5, 0, 0.5]
+  ],
+  "basis": [
+    {
+      "type": "Ag",
+      "positions": [[0, 0, 0]],
+      "valence_orbitals": ["d"],
+      "conductance_orbitals": ["s"],
+      "spin_coupled_orbitals": ["d"]
+    },
+    {
+      "type": "Sb",
+      "positions": [[0.5, 0.5, 0.5]],
+      "valence_orbitals": ["s"],
+      "conductance_orbitals": ["p"],
+      "spin_coupled_orbitals": ["p"]
+    },
+    {
+      "type": "Br",
+      "positions": [
+        [0.5, 0.5, 0.25],
+        [0.5, 0.5, 0.75],
+        [0.5, 0.25, 0.5],
+        [0.5, 0.75, 0.5],
+        [0.25, 0.5, 0.5],
+        [0.75, 0.5, 0.5]
+      ],
+      "valence_orbitals": ["p"],
+      "conductance_orbitals": []
+    }
+  ],
+  "brillouin_zone": {
+    "\\Gamma": [0, 0, 0],
+    "L": [0.5, 0.5, 0.5],
+    "X": [0.5, 0, 0.5]
+  }
+}

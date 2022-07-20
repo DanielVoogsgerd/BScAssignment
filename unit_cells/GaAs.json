@@ -1,0 +1,28 @@
+{
+  "lattice": [
+    [0.5, 0.5, 0],
+    [0.5, 0, 0.5],
+    [0, 0.5, 0.5]
+  ],
+  "basis": [
+    {
+      "type": "Ga",
+      "positions": [[0, 0, 0]],
+      "valence_orbitals": ["s"],
+      "conductance_orbitals": ["p"]
+    },
+    {
+      "type": "As",
+      "positions": [[0.25, 0.25, 0.25]],
+      "valence_orbitals": ["s"],
+      "conductance_orbitals": ["p"]
+    }
+  ],
+  "brillouin_zone": {
+    "L": [0.5, 0.5, 0.5],
+    "\\Gamma": [0, 0, 0],
+    "X": [0, 1, 0],
+    "W": [0.5, 1, 0],
+    "K": [0.25, 0.75, 0]
+  }
+}

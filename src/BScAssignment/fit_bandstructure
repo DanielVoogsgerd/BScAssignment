@@ -1,0 +1,250 @@
+#!/usr/bin/env python
+"""Fit a Tight Binding model to existing bandstructures."""
+from tight_binding.model import TightBinding
+from sympy.vector import CoordSys3D
+from tight_binding.objects import UnitCell
+from fitting.fit import (
+    fit_bandstructure,
+    heuristic_least_squares,
+    heuristic_signage_check,
+    heuristic_conductance_bias,
+    heuristic_valence_bias,
+)
+from bandstructures import Bandstructure
+import os
+from multiprocessing import Pool
+from functools import partial
+from itertools import product, chain
+from tqdm import tqdm
+import pandas as pd
+from os import mkdir
+from os.path import join, exists
+import json
+from datetime import datetime
+import argparse
+from utils.JSONEncoder import CustomEncoder
+
+from typing import Dict
+from sympy import Symbol
+from sys import exit
+
+
+SIMULATION_BASE_DIRECTORY = "results/"
+UNIT_CELL_BASE_DIRECTORY = "unit_cells/"
+DATA_BASE_DIRECTORY = "bandstructures/"
+
+MULTITHREADING = True
+
+def create_simulation_directory() -> str:
+    """Create directory for simulation information and results."""
+    now = datetime.now()
+    dirname = join(SIMULATION_BASE_DIRECTORY, now.strftime("%Y%m%d-%H%M%S"))
+    mkdir(dirname)
+    return dirname
+
+
+DEFAULT_CPU_THREADS = 7
+DEFAULT_BASIN_ITERATIONS = 50
+DEFAULT_ENERGY_PARAMETERS = [-5, 5]
+
+r = CoordSys3D("r")
+
+
+def parse_arguments() -> argparse.Namespace:
+    """Parse command line arguments."""
+    parser = argparse.ArgumentParser(
+        description="Fit a Tight Binding model to an existing bandstructure."
+    )
+    parser.add_argument("material", help="Material for which you want to fit a bandstructure")
+    parser.add_argument(
+        "--basin",
+        type=int,
+        default=DEFAULT_BASIN_ITERATIONS,
+        help=f"How many basinhopping interations you'd like to perform. Default: {DEFAULT_BASIN_ITERATIONS}"
+    )
+    parser.add_argument(
+        "--energy",
+        action="extend",
+        nargs="*",
+        type=float,
+        help=f"Orbital energies from which to start the fits. Default: {DEFAULT_ENERGY_PARAMETERS}"
+    )
+    parser.add_argument(
+        "--threads",
+        type=int,
+        default=DEFAULT_CPU_THREADS,
+        help=f"The amount of threads to use for the fit. Default: {DEFAULT_CPU_THREADS}"
+    )
+    parser.add_argument(
+        "--data-file-suffix",
+        type=str,
+        default="",
+        help="A suffix to attach to the filename for the data file"
+    )
+    parser.add_argument(
+        "--unit-cell-suffix",
+        type=str,
+        default="",
+        help="A suffix to attach to the filename for the unit file"
+    )
+
+    return parser.parse_args()
+
+
+def store_simulation_parameters(**kwargs):
+    """Store simulation parameters in JSON format."""
+    with open(join(SIMULATION_DIRECTORY, "info.json"), "w", encoding="utf-8") as f:
+        f.write(json.dumps(kwargs, cls=CustomEncoder))
+
+
+def is_valid_configuration(configuration: Dict[Symbol, float]) -> bool:
+    """Check if current configuration is valid.
+
+    Currently checks:
+        - Valance orbitals have a negative energy
+        - Conductance orbitals have a positive energy
+    """
+    for symbol, value in configuration.items():
+        if symbol in valence_orbitals and value > 0:
+            return False
+        if symbol in conductance_orbitals and value < 0:
+            return False
+
+    return True
+
+
+if __name__ == "__main__":
+    if not exists(SIMULATION_BASE_DIRECTORY):
+        print(f"Simulation base directory: {SIMULATION_BASE_DIRECTORY} does not exist")
+        exit(1)
+
+    # TODO: On error: Store error in the SIMULATION_DIRECTORY
+    simulation_parameters = parse_arguments()
+
+    material = simulation_parameters
+
+    unit_cell_path = os.path.join(UNIT_CELL_BASE_DIRECTORY, simulation_parameters.material + simulation_parameters.unit_cell_suffix + ".json")
+    data_file_path = os.path.join(DATA_BASE_DIRECTORY, simulation_parameters.material + simulation_parameters.data_file_suffix + ".json")
+
+    r = CoordSys3D("r")
+
+    with open(unit_cell_path, encoding="utf-8") as f:
+        unit_cell_dict = json.load(f)
+
+    unit_cell = UnitCell.from_dict(unit_cell_dict, r)
+
+    model = TightBinding(unit_cell, r)
+    matrix = model.construct_hamiltonian(1)
+
+    bandstructure = Bandstructure(data_file_path)
+    symmetry_points = bandstructure.get_symmetry_points()
+
+    spin_count = 2 if unit_cell.spin_orbit_coupling else 1
+
+    eigenvalues = bandstructure.load_bands(
+        symmetry_points,
+        unit_cell.valence_orbital_count * spin_count,
+        unit_cell.conductance_orbital_count * spin_count,
+    )
+
+    points_per_direction = bandstructure.get_points_per_direction(symmetry_points)
+
+    k_values = unit_cell.get_k_values(
+        unit_cell.get_symmetry_points(symmetry_points), points_per_direction
+    )
+
+    heuristic = [
+        (heuristic_least_squares, 1),
+        (heuristic_valence_bias, 6),
+        (heuristic_conductance_bias, 6),
+        (heuristic_signage_check, 10),
+    ]
+
+    partialfunc = partial(
+        fit_bandstructure,
+        heuristic,
+        model,
+        k_values,
+        eigenvalues,
+        basinhopping_iterations=simulation_parameters.basin,
+    )
+
+    energy_symbols = model.energy_symbols
+    overlap_symbols = model.energy_integral_symbols
+    soc_symbols = model.soc_symbols
+
+    params = list(chain(energy_symbols, overlap_symbols, soc_symbols))
+
+    print("SOC", unit_cell.spin_orbit_coupling)
+    print("Symbols", matrix.free_symbols)
+
+    # List all valence and conductance orbitals so we can filter the configurations
+    conductance_orbitals = []
+    valence_orbitals = []
+    for atom in model.unit_cell.atoms:
+        for orbital_class, orbitals in atom.valence_orbitals:
+            for orbital in orbitals:
+                valence_orbitals.append(model.get_energy_symbol(atom, orbital))
+
+        for orbital_class, orbitals in atom.conductance_orbitals:
+            for orbital in orbitals:
+                conductance_orbitals.append(model.get_energy_symbol(atom, orbital))
+
+    energy_values = (
+        simulation_parameters.energy
+        if simulation_parameters.energy is not None
+        else DEFAULT_ENERGY_PARAMETERS
+    )
+
+    configurations = [
+        dict(zip(energy_symbols, values))
+        for values in product(energy_values, repeat=len(energy_symbols))
+    ]
+
+    # Filter out positive valance orbitals en negative conductance orbitals
+    valid_configurations = [
+        config
+        for config in configurations
+        if is_valid_configuration(config)
+    ]
+
+    print("We'll be guessing the following starting parameters:")
+    for configuration in valid_configurations:
+        print(configuration)
+
+    # Scipy basinhopping uses two cores per pool
+    if MULTITHREADING:
+        pool = Pool(simulation_parameters.threads // 2)
+        list_of_results = tqdm(
+            pool.imap(partialfunc, valid_configurations), total=len(valid_configurations)
+        )
+        pool.close()
+    else:
+        list_of_results = tqdm(
+            map(partialfunc, valid_configurations), total=len(valid_configurations)
+        )
+
+
+    columns = sorted([str(symbol) for symbol in params]) + [
+        "Energy"
+    ]
+
+    dataset = []
+
+    for i, configuration in enumerate(list_of_results):
+        data = dict(zip(configuration[0], configuration[1].x))
+        data["Error"] = configuration[1].fun
+        dataset.append(data)
+
+    SIMULATION_DIRECTORY = create_simulation_directory()
+
+    df = pd.DataFrame(dataset)
+    df.to_csv("{basedir}/data.csv".format(basedir=SIMULATION_DIRECTORY), index=False)
+
+    store_simulation_parameters(
+        arguments=simulation_parameters.__dict__,
+        version=0.2,
+        unit_cell=unit_cell_dict,
+        data_file=data_file_path,
+        heuristic=heuristic,
+    )

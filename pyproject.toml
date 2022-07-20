@@ -1,0 +1,45 @@
+[project]
+name = "BScAssignment"
+version = "0.1"
+description = ""
+authors = [
+    {name = "Daniel Voogsgerd", email = "daniel@voogsgerd.nl"},
+]
+dependencies = [
+    "tight-binding @ file:///${PROJECT_ROOT}/../tight_binding",
+    "scipy>=1.9.3",
+    "tqdm>=4.65.0",
+    "pandas>=2.0.2",
+    "matplotlib>=3.7.1",
+    "pyfzf>=0.3.1",
+]
+requires-python = ">=3.11"
+license = {text = "MIT"}
+
+[build-system]
+requires = ["pdm-backend"]
+build-backend = "pdm.backend"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/BScAssignment"]
+
+[tool.pytest.ini_options]
+addopts = [
+    "--import-mode=importlib",
+]
+
+
+[tool.mypy]
+strict = true
+
+[[tool.mypy.overrides]]
+module = "sympy.*"
+ignore_errors = true
+follow_imports = "skip"
+
+[tool.pdm.dev-dependencies]
+dev = [
+    "notebook>=6.5.4",
+    "ipywidgets>=8.0.6",
+    "widgetsnbextension>=4.0.7",
+]
